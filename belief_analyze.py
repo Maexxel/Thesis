@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 import numpy as np
 import matplotlib.pyplot as plt
 
-from belif_utils import MyTrial, RpeGroup
+from belief_utils import MyTrial, RpeGroup
 
 
 def fit_weights(trials: List[Trial], gamma=0.93, lambda0=0):

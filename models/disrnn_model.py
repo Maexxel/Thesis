@@ -20,6 +20,25 @@ class MLP(nn.Module):
                 x = self.activation(x)
         return x
 
+def kl_gaussian_loss(mean: jnp.ndarray, var: jnp.ndarray) -> jnp.ndarray:
+  r"""
+  Src: https://github.com/kstach01/CogModelingRNNsTutorial.git
+
+  Calculate KL divergence between given and standard gaussian distributions.
+
+  KL(p, q) = H(p, q) - H(p) = -\int p(x)log(q(x))dx - -\int p(x)log(p(x))dx
+          = 0.5 * [log(|s2|/|s1|) - 1 + tr(s1/s2) + (m1-m2)^2/s2]
+          = 0.5 * [-log(|s1|) - 1 + tr(s1) + m1^2] (if m2 = 0, s2 = 1)
+  Args:
+    mean: mean vector of the first distribution
+    var: diagonal vector of covariance matrix of the first distribution
+
+  Returns:
+    A scalar representing KL divergence of the two Gaussian distributions.
+  """
+  # jax.debug.# print("Mean-Mu: {x}, Mean-Sigma: {y}", x=mean, y=var)
+  return 0.5 * jnp.sum(-jnp.log(var) - 1.0 + var + jnp.square(mean), axis=-1)
+
    
 class DisRNNCell(nn.RNNCellBase):
     hidden_size: int
@@ -27,7 +46,6 @@ class DisRNNCell(nn.RNNCellBase):
     out_dim: int
     update_mlp_shape: Sequence[int]
     choice_mlp_shape: Sequence[int]
-    rng_key: PRNGKey
 
     param_dtype: Dtype = jnp.float32
     carry_init: Initializer = nn.initializers.zeros_init()
@@ -39,46 +57,66 @@ class DisRNNCell(nn.RNNCellBase):
         assert inputs.shape == (self.in_dim, ), f"Input of DisRNNCell <{inputs.shape}> has invalid shape/size, should be <{(self.in_dim, )}>."
 
         # create needed random splits
-        latent_normal, update_normal = jax.random.split(self.rng_key, 2)
+        latent_normal_key, update_normal_key = jax.random.split(self.make_rng("bottleneck_master_key"), 2)
 
         # Update Bottlenecks
-        n_update_bootlenecks = self.hidden_size + self.in_dim
+        n_update_bootlenecks = (self.hidden_size + self.in_dim) * self.hidden_size
         update_bottleneck_mus = self.param("update_bottleneck_mus",
                                            lambda key, shape: jax.nn.initializers.uniform(0.1)(key, shape) + 1,
                                            (n_update_bootlenecks,))
         update_bottleneck_sigmas = self.param("update_bottleneck_sigmas",
-                                              lambda key, shape: jax.nn.initializers.uniform(0.1)(key, shape),
+                                              lambda key, shape: jnp.abs(jax.nn.initializers.uniform(0.1)(key, shape)) - 3,
                                            (n_update_bootlenecks,))
+        update_bottleneck_sigmas = 2 * jax.nn.sigmoid(update_bottleneck_sigmas)
         
-        complete_input = jnp.hstack([carry, inputs])
-        bl_complete_input = update_bottleneck_mus * complete_input + update_bottleneck_sigmas * jax.random.normal(update_normal, (n_update_bootlenecks, ))
-        del update_normal
-        
+        # duplicate input (-> update_bottleneck for every Update-MLP)
+        complete_input = jnp.tile(jnp.hstack([carry, inputs]), self.hidden_size)
+        assert complete_input.shape == ((self.hidden_size + self.in_dim) * self.hidden_size, )
+
+        bl_complete_input = update_bottleneck_mus * complete_input + update_bottleneck_sigmas * jax.random.normal(update_normal_key, (n_update_bootlenecks, ))
+        del update_normal_key
+
         # Update MLPs
         for latent_idx in range(self.hidden_size):
+            # extraxt input for MLP
+            start_idx = latent_idx * (self.hidden_size + self.in_dim)
+            end_idx = start_idx + (self.hidden_size + self.in_dim)
+            update_mlp_in = bl_complete_input[start_idx:end_idx]
+            assert update_mlp_in.shape == (self.hidden_size + self.in_dim, )
+
+            # Calc weight and update (Output of Update-MLP)
             update_mlp_out_raw = MLP(hidden_neurons=self.update_mlp_shape,
-                                     activation=nn.relu, name=f"update_mlp_{latent_idx}")(bl_complete_input)
+                                     activation=nn.relu, name=f"update_mlp_{latent_idx}")(update_mlp_in)
             weight, update = nn.Dense(2)(update_mlp_out_raw)
+            weight = jax.nn.sigmoid(weight)
+
+            # Set new carry value
             new_carry_val = (1 - weight) * carry[latent_idx] + weight * update
             carry = carry.at[latent_idx].set(new_carry_val)            
-            
+
         # Latent Bottlenecks
         n_latent_bottlenecks = self.hidden_size
         latent_bottleneck_mus = self.param("latent_bottleneck_mus",
                                            lambda key, shape: jax.nn.initializers.uniform(0.1)(key, shape) + 1,
                                            (n_latent_bottlenecks,))
         latent_bottleneck_sigmas = self.param("latent_bottleneck_sigmas",
-                                              lambda key, shape: jax.nn.initializers.uniform(0.1)(key, shape),
+                                              lambda key, shape: jnp.abs(jax.nn.initializers.uniform(0.1)(key, shape))  - 3,
                                            (n_latent_bottlenecks,))
+        latent_bottleneck_sigmas = 2 * jax.nn.sigmoid(latent_bottleneck_sigmas)
 
-        bl_carry = latent_bottleneck_mus * carry + latent_bottleneck_sigmas * jax.random.normal(latent_normal, (n_latent_bottlenecks, ))
-        del latent_normal
+        bl_carry = latent_bottleneck_mus * carry + latent_bottleneck_sigmas * jax.random.normal(latent_normal_key, (n_latent_bottlenecks, ))
+        del latent_normal_key
 
         # Choice MLP
         output_raw = MLP(self.choice_mlp_shape, activation=nn.relu, name="choice_mlp")(bl_carry)
         output = nn.Dense(self.out_dim)(output_raw)
 
-        return bl_carry , output # new carry / output
+        kl_loss = jnp.array([kl_gaussian_loss(jnp.hstack([update_bottleneck_mus, latent_bottleneck_mus]),
+                                              jnp.hstack([update_bottleneck_sigmas, latent_bottleneck_sigmas]))]
+                                              )
+        out = jnp.hstack([output, kl_loss])
+
+        return bl_carry , out # new carry / output
     
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
@@ -107,26 +145,25 @@ class DisRNN(nn.Module):
     update_mlp_shape: Sequence[int]
     choice_mlp_shape: Sequence[int]
 
-    rng_key: PRNGKey = jax.random.key(0)
+    carry_init_key: PRNGKey
 
     def __get_self_args(self) -> Dict[str, Any]:
         return{"hidden_size": self.hidden_size,
                "in_dim": self.in_dim,
                "out_dim": self.out_dim,
                "update_mlp_shape": self.update_mlp_shape,
-               "choice_mlp_shape": self.choice_mlp_shape,
-               "rng_key": self.rng_key}
+               "choice_mlp_shape": self.choice_mlp_shape,}
 
     @nn.compact
-    def __call__(self, inputs, inspect=False):       
-        carry = DisRNNCell(**self.__get_self_args()).initialize_carry(self.rng_key, inputs[:, 0].shape)
+    def __call__(self, inputs, inspect=False):
+        carry = self.initialize_carry(inputs[:, 0].shape)
 
         if inspect:
             assert len(inputs.shape) == 2, \
                 f"Input in Inspect mode must be a single Sequence (no batching), not shape <{inputs.shape}>."
 
             carry_complete = jnp.zeros((len(inputs), self.hidden_size))
-            output_complete = jnp.zeros((len(inputs), self.out_dim))
+            output_complete = jnp.zeros((len(inputs), self.out_dim + 1)) # The kl-loss dim has to be added
 
             disrnn_cell = DisRNNCell(**self.__get_self_args(), name="DisRNNCell0")
 
@@ -145,42 +182,41 @@ class DisRNN(nn.Module):
                                in_axes=0,
                                out_axes=0,
                                variable_axes={'params': None},
-                               split_rngs={'params': False})
+                               split_rngs={'params': False, "bottleneck_master_key": True})
 
         # parallize over steps ("fast for-loop")
         scan_disrnn = nn.scan(batch_disrnn,
                               variable_broadcast='params',
                               in_axes=1,
                               out_axes=1,
-                              split_rngs={'params': False},
+                              split_rngs={'params': False, "bottleneck_master_key": True},
                               )
-
+        
         return scan_disrnn(**self.__get_self_args(), name="DisRNNCell0")(carry, inputs)[1]
 
     def initialize_carry(self, input_shape):
         # Use fixed random key since default state init fn is just zeros.
         return DisRNNCell(**self.__get_self_args(), parent=None).initialize_carry(
-            self.rng_key, input_shape
-        )
-        
+            self.carry_init_key, input_shape
+        )  
 
 if __name__ == "__main__":
-    test_input = jnp.array([[[1., 2], [2., 2], [3., 2]],
-                            [[4., 2], [5., 2], [6., 2]]])
+    master_key = jax.random.key(0)
+    carry_init_key, param_key, bottleneck_master_key = jax.random.split(master_key, 3) 
+
+    input = jnp.array([[[1., 1.], [1., 1.], [1., 1.]],
+                    [[1., 1.], [1., 1.], [1., 1.]]])
 
     model = DisRNN(hidden_size=5,
-                   in_dim=2,
-                   out_dim=2,
-                   update_mlp_shape=[5, 5, 5],
-                   choice_mlp_shape=[2, 2],
-                   rng_key=jax.random.key(0))
-    params = model.init(jax.random.key(0), test_input)["params"]
+                    in_dim=2,
+                    out_dim=1,
+                    update_mlp_shape=[5, 5, 5],
+                    choice_mlp_shape=[2, 2],
+                    carry_init_key=carry_init_key)
+    del carry_init_key
+
+    params = model.init(param_key, input)["params"]
+    del param_key
 
     print("Output:")
-    print(model.apply({"params": params}, test_input))
-
-    print(model.tabulate(jax.random.key(0),
-                         test_input,
-                         compute_flops=True,
-                         compute_vjp_flops=True,
-                         console_kwargs={"width": 200}))
+    print(model.apply({"params": params}, input, rngs={"bottleneck_master_key": bottleneck_master_key}))
