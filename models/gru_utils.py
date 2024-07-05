@@ -3,11 +3,24 @@ import optax
 import jax.numpy as jnp
 from flax.training import train_state
 
-from .rnn_utils import safe_softmax_cross_entropy, compute_accuracy
+from .rnn_utils import safe_softmax_cross_entropy, compute_accuracy, value_loss
 from .gru_model import SimpleGRU
 
 @jax.jit
-def gru_train_step(state: train_state.TrainState, xbatch, ybatch,):
+def gru_value_trainstep(state: train_state.TrainState, xbatch, ybatch):
+    def loss_fun(params):
+        logits = state.apply_fn({'params': params},
+                                xbatch)
+        loss =  value_loss(logits, ybatch, 0.93)
+        return loss, logits
+    grad_fn = jax.value_and_grad(loss_fun, has_aux=True)
+    (loss, logits), grads = grad_fn(state.params)
+    state = state.apply_gradients(grads=grads)
+    return state, {"loss": loss}
+
+
+@jax.jit
+def gru_trainstep(state: train_state.TrainState, xbatch, ybatch,):
     def loss_fun(params):
         logits = state.apply_fn({'params': params},
                                 xbatch)

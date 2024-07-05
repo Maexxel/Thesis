@@ -46,6 +46,7 @@ class DisRNNCell(nn.RNNCellBase):
     out_dim: int
     update_mlp_shape: Sequence[int]
     choice_mlp_shape: Sequence[int]
+    inspect: bool
 
     param_dtype: Dtype = jnp.float32
     carry_init: Initializer = nn.initializers.zeros_init()
@@ -116,7 +117,9 @@ class DisRNNCell(nn.RNNCellBase):
                                               )
         out = jnp.hstack([output, kl_loss])
 
-        return bl_carry , out # new carry / output
+        if self.inspect:
+            return bl_carry, jnp.hstack([bl_carry, out])
+        return bl_carry , out
     
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
@@ -157,26 +160,6 @@ class DisRNN(nn.Module):
     @nn.compact
     def __call__(self, inputs, inspect=False):
         carry = self.initialize_carry(inputs[:, 0].shape)
-
-        if inspect:
-            assert len(inputs.shape) == 2, \
-                f"Input in Inspect mode must be a single Sequence (no batching), not shape <{inputs.shape}>."
-
-            carry_complete = jnp.zeros((len(inputs), self.hidden_size))
-            output_complete = jnp.zeros((len(inputs), self.out_dim + 1)) # The kl-loss dim has to be added
-
-            disrnn_cell = DisRNNCell(**self.__get_self_args(), name="DisRNNCell0")
-
-            # iterate over every element of the sequence
-            for idx, single_x in enumerate(inputs):
-                carry, out = disrnn_cell(carry, single_x)
-
-                # store weights (a.k.a carry and output)
-                carry_complete = carry_complete.at[idx].set(carry)
-                output_complete = output_complete.at[idx].set(out)
-
-            return carry_complete, output_complete
-
         # parallize over batches
         batch_disrnn = nn.vmap(DisRNNCell,
                                in_axes=0,
@@ -191,12 +174,15 @@ class DisRNN(nn.Module):
                               out_axes=1,
                               split_rngs={'params': False, "bottleneck_master_key": True},
                               )
-        
-        return scan_disrnn(**self.__get_self_args(), name="DisRNNCell0")(carry, inputs)[1]
+
+        _, out = scan_disrnn(**self.__get_self_args(), inspect=inspect, name="DisRNNCell0")(carry, inputs)
+        if inspect:
+            return out[:, :, :self.hidden_size], out[:, :, self.hidden_size:]
+        return out
 
     def initialize_carry(self, input_shape):
         # Use fixed random key since default state init fn is just zeros.
-        return DisRNNCell(**self.__get_self_args(), parent=None).initialize_carry(
+        return DisRNNCell(**self.__get_self_args(), inspect=False, parent=None).initialize_carry(
             self.carry_init_key, input_shape
         )  
 
@@ -219,4 +205,4 @@ if __name__ == "__main__":
     del param_key
 
     print("Output:")
-    print(model.apply({"params": params}, input, rngs={"bottleneck_master_key": bottleneck_master_key}))
+    print(model.apply({"params": params}, input, True, rngs={"bottleneck_master_key": bottleneck_master_key}))

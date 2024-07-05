@@ -251,7 +251,6 @@ def eval(dataset: Dataset,
     if inspect:
         carrys, outputs = [], []
         for seq in dataset.xs[dataset_start: dataset_end]:
-            print("Sequence: ", seq)
             test_input = np.array(seq)
             carry, output = model_state.apply_fn({'params': model_state.params}, test_input, inspect=True, rngs={"bottleneck_master_key": jax.random.key(0)})
             output = output if true_output is None else output[:,:true_output]
@@ -296,7 +295,9 @@ def eval_value_wrapper(dataset: MyStarkweather,
     """
     if verbose:
         print("Probing Model (this may take some time)...")
-    weights, outputs = eval(dataset, model_state, inspect=True)
+    weights, outputs = model_state.apply_fn({'params': model_state.params},
+                                            dataset.xs, inspect=True,
+                                            rngs={"bottleneck_master_key": jax.random.key(0)})  # is not uses when using a GRU cell
 
     # Ensure outputs have expected shape (batch_size/n_seq, seq_len)
     outputs = outputs.squeeze(-1)
