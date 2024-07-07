@@ -10,11 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.transforms import ScaledTranslation
 
 from .rnn_utils import load_model_state
-
-
-import matplotlib.pyplot as plt
-import numpy as np
-import jax.numpy as jnp
+from .disrnn_model import DisRNNCell
 
 def plot_bottlenecks(params: Dict,
                      sort_latents: bool=True,
@@ -91,7 +87,7 @@ def plot_bottlenecks(params: Dict,
 import absl.logging
 absl.logging.set_verbosity('error')
 
-def plot_bottleneck_evolution(state: DisRNNTrainState, path: str, end=None):
+def plot_bottleneck_evolution(path: str, end=None):
     """
     Plots the evolution of latent and update sigmas over training checkpoints.
 
@@ -145,7 +141,7 @@ def plot_bottleneck_evolution(state: DisRNNTrainState, path: str, end=None):
     update_sigmas = []
 
     for checkpoint in checkpoints:
-        state = load_model_state(state, path, step=checkpoint[1])
+        state = load_model_state(path=path, step=checkpoint[1])
         if state is None:
             print(f"Checkpoint <checkpoint_{checkpoint[1]}> could not be loaded.")
             continue
@@ -210,3 +206,259 @@ def plot_bottleneck_evolution(state: DisRNNTrainState, path: str, end=None):
     fig.colorbar(im1, ax=[ax1, ax2], orientation='vertical')
 
     return fig
+
+
+def decode_disrnn_params(disrnn_params: Dict) -> Tuple[int, int, int, List[int], List[int]]:
+    """Decodes DisRNN parameters from the given dictionary.
+
+    Args:
+        disrnn_params (Dict): A dictionary containing DisRNN parameters.
+
+    Returns:
+        Tuple[int, int, int, List[int], List[int]]: A tuple containing:
+            - hidden_size (int): The size of the hidden layer.
+            - input_size (int): The size of the input layer.
+            - out_size (int): The size of the output layer.
+            - update_mlp_shape (List[int]): The shape of the update MLP.
+            - choice_mlp_shape (List[int]): The shape of the choice MLP.
+
+    Raises:
+        AssertionError: If `hidden_size` or `input_size` is not greater than 0.
+    """
+    hidden_size = len(disrnn_params["latent_bottleneck_sigmas"])
+    assert hidden_size > 0, "hidden_size must be greater than 0"
+    
+    input_size = len(disrnn_params["update_bottleneck_sigmas"]) // hidden_size - hidden_size
+    assert input_size > 0, "input_size must be greater than 0"
+    
+    out_size = len(disrnn_params[f'Dense_{hidden_size}']["bias"])
+    
+    update_mlp_shape = [len(umlp["bias"]) for umlp in disrnn_params["update_mlp_0"].values()]
+    choice_mlp_shape = [len(umlp["bias"]) for umlp in disrnn_params["choice_mlp"].values()]
+
+    return hidden_size, input_size, out_size, update_mlp_shape, choice_mlp_shape
+
+
+def force_carry(carries: jnp.array, xs: jnp.array, disrnn_params: Dict) -> Tuple[jnp.array, jnp.array]:
+    """Forces carry operations in a DisRNN cell.
+
+    Args:
+        carries (jnp.array): The carry inputs, a 2D array of shape (batch_size, hidden_size).
+        xs (jnp.array): The input data, a 2D array of shape (batch_size, input_size).
+        disrnn_params (Dict): A dictionary containing DisRNN parameters.
+
+    Returns:
+        Tuple[jnp.array, jnp.array]: A tuple containing:
+            - Updated carries (jnp.array): A 2D array of updated carry values of shape (batch_size, hidden_size).
+            - Outputs (jnp.array): A 2D array of output values of shape (batch_size, out_size).
+
+    Raises:
+        AssertionError: If any of the input shapes or types are invalid.
+    """
+    # Check input types and shapes
+    assert isinstance(disrnn_params, dict), "disrnn_params must be a dictionary"
+    assert len(carries.shape) == len(xs.shape) == 2, "carries and xs must be 2D arrays"
+    assert carries.shape[0] == xs.shape[0], "carries and xs must have the same batch size"
+    
+    hidden_size, input_size, out_size, update_mlp_shape, choice_mlp_shape = decode_disrnn_params(disrnn_params)
+
+    assert carries.shape[1] == hidden_size, "carries must have shape (batch_size, hidden_size)"
+    assert xs.shape[1] == input_size, "xs must have shape (batch_size, input_size)"
+
+    # Initialize DisRNNCell
+    disrnn_cell = DisRNNCell(hidden_size=hidden_size,
+                             in_dim=input_size,
+                             out_dim=out_size,
+                             update_mlp_shape=update_mlp_shape,
+                             choice_mlp_shape=choice_mlp_shape)
+    
+    # Define the function to be vectorized
+    def func(full_input: jnp.array) -> Tuple[jnp.array, jnp.array]:
+        carrie_in = full_input[:hidden_size]
+        input_data = full_input[hidden_size:]
+        carrie, out = disrnn_cell.apply({"params": disrnn_params},
+                                        carrie_in,
+                                        input_data,
+                                        rngs={"bottleneck_master_key": jax.random.PRNGKey(0)})
+        
+        return jnp.hstack([carrie, out])
+    
+    # Stack carries and xs and apply the vectorized function
+    full_input = np.hstack([carries, xs])
+    vfunc = jax.vmap(func, in_axes=0)
+    full_out = vfunc(full_input)
+    
+    return full_out[:, :hidden_size], full_out[:, hidden_size:]
+
+
+def plot_update_rules(params: Dict) -> List[plt.Figure]:
+    """Generates visualizations of the update rules of a DisRNN.
+
+    Args:
+        params (Dict): A dictionary containing the parameters of a DisRNN model.
+
+    Returns:
+        List[plt.Figure]: A list of matplotlib figures showing the update rules.
+
+    Raises:
+        AssertionError: If any parameter checks fail.
+    """
+    # Extract parameters from the input dictionary
+    params_disrnn = params['DisRNNCell0']
+    latent_dim = params_disrnn['latent_bottleneck_sigmas'].shape[0]
+
+    # Compute sigmas for latent and update bottlenecks
+    latent_sigmas = 2 * jax.nn.sigmoid(jnp.array(params_disrnn['latent_bottleneck_sigmas']))
+    update_sigmas = 2 * jax.nn.sigmoid(jnp.array(params_disrnn['update_bottleneck_sigmas']))
+    update_sigmas = update_sigmas.reshape((latent_dim, -1))
+    latent_sigma_order = np.argsort(params_disrnn['latent_bottleneck_sigmas'])
+
+    def plot_update_1d(params: Dict, latent_idx: int, observations: List[List[int]], titles: List[str]) -> plt.Figure:
+        """Plots 1D update rules.
+
+        Args:
+            params (Dict): DisRNN parameters.
+            latent_idx (int): Index of the latent variable.
+            observations (List[List[int]]): List of observations.
+            titles (List[str]): Titles for the plots.
+
+        Returns:
+            plt.Figure: The resulting plot figure.
+        """
+        # Set up general layout for 1D plot
+        lim = 1
+        hidden_size = len(params["latent_bottleneck_sigmas"])
+        state_bins = np.linspace(-lim, lim, 20)
+        colormap = plt.get_cmap('viridis', 3)
+        colors = colormap.colors
+
+        fig, ax = plt.subplots(1, len(observations), figsize=(len(observations) * 4, 5.5))
+        plt.subplot(1, len(observations), 1)
+        plt.ylabel('Updated Activity')
+
+        # Prepare input data for the model
+        bloated_observations = np.repeat(np.array(observations), len(state_bins), 0)
+        carries = np.zeros((len(state_bins), hidden_size))
+        carries[:, latent_idx] = state_bins
+        bloated_carrie = np.tile(carries, [len(observations), 1])
+
+        # Probe the model with input data
+        carries, _ = force_carry(bloated_carrie, bloated_observations, params)
+        carries = carries[:, latent_idx].reshape(len(observations), -1)
+
+        # Plot the output data
+        for observation_i in range(len(observations)):
+            plt.subplot(1, len(observations), observation_i + 1)
+            plt.plot((-3, 3), (-3, 3), '--', color='grey')
+            plt.plot((-3, 3), (0, 0), color='black')
+            plt.plot((0, 0), (-3, 3), color='black')
+            plt.plot(state_bins, carries[observation_i], color=colors[1])
+            plt.title(titles[observation_i])
+            plt.xlim(-lim, lim)
+            plt.ylim(-lim, lim)
+            plt.xlabel('Previous Activity')
+
+            if isinstance(ax, np.ndarray):
+                ax[observation_i].set_aspect('equal')
+            else:
+                ax.set_aspect('equal')
+        return fig
+
+    def plot_update_2d(params: Dict, latent_idx: int, latent_input: int, observations: List[List[int]], titles: List[str]) -> plt.Figure:
+        """Plots 2D update rules.
+
+        Args:
+            params (Dict): DisRNN parameters.
+            latent_idx (int): Index of the latent variable.
+            latent_input (int): Index of the latent input variable.
+            observations (List[List[int]]): List of observations.
+            titles (List[str]): Titles for the plots.
+
+        Returns:
+            plt.Figure: The resulting plot figure.
+        """
+        # Set up general layout for 2D plot
+        lim = 1
+        hidden_size = len(params["latent_bottleneck_sigmas"])
+        state_bins = np.linspace(-lim, lim, 10)
+        colormap = plt.get_cmap('viridis', len(state_bins))
+        colors = colormap.colors
+
+        fig, ax = plt.subplots(1, len(observations), figsize=(len(observations) * 2 + 10, 5.5))
+        plt.subplot(1, len(observations), 1)
+        plt.ylabel('Updated Latent ' + str(latent_idx + 1) + ' Activity')
+
+        # Prepare input data for the model
+        bloated_observations = np.repeat(np.array(observations), len(state_bins) * len(state_bins), 0)
+        bloated_carries = np.zeros((len(bloated_observations), hidden_size))
+
+        # Set up carries with state bins
+        second_latent_input = np.tile(np.repeat(state_bins, len(state_bins)), len(observations))
+        bloated_carries[:, latent_input] = second_latent_input
+        first_latent_input = np.tile(state_bins, len(state_bins) * len(observations))
+        bloated_carries[:, latent_idx] = first_latent_input
+
+        # Probe the model with input data
+        carries, _ = force_carry(bloated_carries, bloated_observations, params)
+        carries = carries[:, latent_idx].reshape(len(observations), len(state_bins), len(state_bins))
+
+        # Plot the output data
+        for observation_i in range(len(observations)):
+            plt.subplot(1, len(observations), observation_i + 1)
+            plt.plot((-3, 3), (-3, 3), '--', color='grey')
+            plt.plot((-3, 3), (0, 0), color='black')
+            plt.plot((0, 0), (-3, 3), color='black')
+
+            for si_i in np.arange(len(state_bins)):
+                plt.plot(state_bins, carries[observation_i][si_i], color=colors[si_i])
+
+            plt.title(titles[observation_i])
+            plt.xlim(-lim, lim)
+            plt.ylim(-lim, lim)
+            plt.xlabel('Latent ' + str(latent_idx + 1) + ' Activity')
+
+            if isinstance(ax, np.ndarray):
+                ax[observation_i].set_aspect('equal')
+            else:
+                ax.set_aspect('equal')
+        return fig
+
+    figs = []
+    for latent_i in latent_sigma_order:
+        if latent_sigmas[latent_i] < 0.8:
+            update_mlp_inputs = np.argwhere(update_sigmas[latent_i] < 0.9)
+            choice_sensitive = np.any(update_mlp_inputs == 0 + latent_dim)
+            reward_sensitive = np.any(update_mlp_inputs == 1 + latent_dim)
+
+            # Determine observations and titles based on sensitivities
+            if choice_sensitive and reward_sensitive:
+                observations = ([0, 0], [0, 1], [1, 0], [1, 1])
+                titles = ('Left, Unrewarded', 'Left, Rewarded', 'Right, Unrewarded', 'Right, Rewarded')
+            elif choice_sensitive:
+                observations = ([0, 0], [1, 0])
+                titles = ('Choose Left', 'Choose Right')
+            elif reward_sensitive:
+                observations = ([0, 0], [0, 1])
+                titles = ('Rewarded', 'Unrewarded')
+            else:
+                observations = ([0, 0],)
+                titles = ('All Trials',)
+
+            # Determine if the update depends on other latent values
+            latent_sensitive = update_mlp_inputs[update_mlp_inputs < latent_dim]
+            latent_sensitive = np.delete(latent_sensitive, latent_sensitive == latent_i)
+
+            fig = None
+            if latent_sensitive.size == 0:
+                # Plot 1D update rule
+                fig = plot_update_1d(params_disrnn, latent_i, observations, titles)
+            else:
+                # Plot 2D update rule
+                fig = plot_update_2d(params_disrnn, latent_i, latent_sensitive[np.argmax(latent_sensitive)], observations, titles)
+            
+            if len(latent_sensitive) > 1:
+                print('WARNING: This update rule depends on more than one other latent. Plotting just one of them.')
+
+            figs.append(fig)
+    
+    return figs

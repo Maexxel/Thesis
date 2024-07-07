@@ -46,8 +46,8 @@ class DisRNNCell(nn.RNNCellBase):
     out_dim: int
     update_mlp_shape: Sequence[int]
     choice_mlp_shape: Sequence[int]
-    inspect: bool
 
+    inspect: bool = False
     param_dtype: Dtype = jnp.float32
     carry_init: Initializer = nn.initializers.zeros_init()
 
@@ -95,24 +95,21 @@ class DisRNNCell(nn.RNNCellBase):
             new_carry_val = (1 - weight) * carry[latent_idx] + weight * update
             carry = carry.at[latent_idx].set(new_carry_val)            
 
-        # Latent Bottlenecks
+        # Latent Bottlenecks (only sigmas)
         n_latent_bottlenecks = self.hidden_size
-        latent_bottleneck_mus = self.param("latent_bottleneck_mus",
-                                           lambda key, shape: jax.nn.initializers.uniform(0.1)(key, shape) + 1,
-                                           (n_latent_bottlenecks,))
         latent_bottleneck_sigmas = self.param("latent_bottleneck_sigmas",
                                               lambda key, shape: jnp.abs(jax.nn.initializers.uniform(0.1)(key, shape))  - 3,
                                            (n_latent_bottlenecks,))
         latent_bottleneck_sigmas = 2 * jax.nn.sigmoid(latent_bottleneck_sigmas)
 
-        bl_carry = latent_bottleneck_mus * carry + latent_bottleneck_sigmas * jax.random.normal(latent_normal_key, (n_latent_bottlenecks, ))
+        bl_carry = carry + latent_bottleneck_sigmas * jax.random.normal(latent_normal_key, (n_latent_bottlenecks, ))
         del latent_normal_key
 
         # Choice MLP
         output_raw = MLP(self.choice_mlp_shape, activation=nn.relu, name="choice_mlp")(bl_carry)
         output = nn.Dense(self.out_dim)(output_raw)
 
-        kl_loss = jnp.array([kl_gaussian_loss(jnp.hstack([update_bottleneck_mus, latent_bottleneck_mus]),
+        kl_loss = jnp.array([kl_gaussian_loss(jnp.hstack([update_bottleneck_mus, carry]),
                                               jnp.hstack([update_bottleneck_sigmas, latent_bottleneck_sigmas]))]
                                               )
         out = jnp.hstack([output, kl_loss])

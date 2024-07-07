@@ -154,6 +154,7 @@ def train_model(train_state: train_state.TrainState,
                 dataloader: DataLoader,
                 train_step_fun: Callable[..., Any],
                 num_epochs: int = 20,
+                epoch_offset: int = 0,
                 print_every_other: int = 1,
                 save_path: None | str = None,
                 plot_metrics: bool = True) -> Tuple[train_state.TrainState, List[Dict[str, float]]]:
@@ -181,7 +182,7 @@ def train_model(train_state: train_state.TrainState,
     training_metrics: Dict[str, float] = {}
 
     training_start_time = time.time()
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(1 + epoch_offset, num_epochs + 1 + epoch_offset):
         start = time.time()
 
         # train epoch
@@ -334,7 +335,7 @@ def eval_value_wrapper(dataset: MyStarkweather,
     return trials
 
 
-def load_model_state(state: train_state.TrainState, path: str, step: int | None = None) -> train_state.TrainState:
+def load_model_state(path: str, state: train_state.TrainState | None = None, step: int | None = None) -> train_state.TrainState:
     try:
         abs_path = os.path.abspath(path)
         return checkpoints.restore_checkpoint(ckpt_dir=abs_path, target=state, step=step)
