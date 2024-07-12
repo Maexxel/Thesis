@@ -1,6 +1,12 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING, List
+if TYPE_CHECKING:
+    from starkweather import Trial
+
 from typing import List
 import numpy as np
 from torch.utils.data import Dataset
+from starkweather import Starkweather
 
 
 class AlternatingDataset(Dataset):
@@ -36,7 +42,6 @@ class MoreThen3Dataset(Dataset):
     def __getitem__(self, idx):
         return self.xs[idx], self.ys[idx]
 
-from starkweather import Starkweather
 class MyStarkweather(Dataset):
     @staticmethod
     def init_from_disk(path: str) -> 'MyStarkweather':
@@ -77,6 +82,19 @@ class MyStarkweather(Dataset):
             self.ys[seq_idx] = raw_exp[0][1].numpy()[:len_sequences]
 
         self.XS_USAGE = n_sequences * len_sequences / total_xs_count
+        self.len_sequences = len_sequences
+
+    def get_raw_trials(self) -> List[Trial]:
+        trials = []
+        for exp in self.raw_exps:
+            i = 0
+            for trial in exp.trials:
+                trials.append(trial)
+                if i > self.len_sequences:
+                    break
+                i += len(trial)
+
+        return trials
 
     def __len__(self):
         return len(self.xs)

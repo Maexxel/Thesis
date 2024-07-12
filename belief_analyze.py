@@ -1,3 +1,6 @@
+#-- Source: The fit_weights and _make_predictions methods are adapted from
+#-- https://github.com/mobeets/value-rnn-beliefs
+
 from __future__ import annotations
 from typing import TYPE_CHECKING, List, Dict
 if TYPE_CHECKING:
