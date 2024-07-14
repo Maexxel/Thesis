@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Dict
 if TYPE_CHECKING:
     from starkweather import Trial
 
@@ -75,7 +75,6 @@ class RpeGroup:
     isi_lenght: None | int
     rpes: List[npt.NDArray[np.float64]] = field(default_factory=lambda: [])
     rpes_avg: npt.NDArray[np.float64] = field(default_factory=lambda: [])
-    group_max: None | float = None
 
     def calc_rpe_avg(self) -> None:
         """
@@ -87,15 +86,63 @@ class RpeGroup:
         self.rpes_avg = np.mean(np.vstack(self.rpes), axis=0)
         assert self.rpes_avg.shape == (self.isi_lenght,), \
             f"RPE averaging didn't work out. Original shape ({len(self.rpes)},{len(self.rpes[0])}) -> {self.rpes_avg.shape}, should be ({self.isi_lenght})"
-    
-    def calc_rpe_max(self) -> None:
-        """
-        Calculate the maximum value of the average RPEs.
 
-        Raises:
-            AssertionError: If RPEs are not provided or rpes_avg is not calculated.
-        """
-        assert self.rpes
-        assert type(self.rpes_avg) is np.ndarray and self.rpes_avg.shape == self.isi_lenght, \
-            "rpes_avg must be calculated before rpe_max. Use method <calc_rpe_avg>."
-        self.group_max = np.max(self.rpes_avg)
+
+def calc_rpe_groups(trials: List[MyTrial]) -> Dict[int, RpeGroup]:
+    """
+    Calculate RPE groups from a list of MyTrial objects.
+
+    Args:
+        trials (List[MyTrial]): List of MyTrial objects to process.
+
+    Returns:
+        Dict[int, RpeGroup]: Dictionary of RpeGroup objects keyed by ISI length.
+    """
+    group_dict: Dict[int, RpeGroup] = {}
+
+    for trial in trials:
+        if not trial.got_reward:
+            continue
+        # get current group
+        current_rpe_group = group_dict.get(trial.isi_lenght, None)
+        if current_rpe_group is None:
+           current_rpe_group = RpeGroup(isi_lenght=trial.isi_lenght)
+           group_dict[trial.isi_lenght] = current_rpe_group
+
+        # shorten rpe_array and error checking
+        shortend_rpes = trial.rpes[trial.iti_lenght:]
+        assert trial.isi_lenght == current_rpe_group.isi_lenght, \
+            f"Shortened RPEs-Array <{len(shortend_rpes)}> doesn't match ISI-length in trial {trial.idx_in_trial} <{current_rpe_group.isi_lenght}>"
+        
+        current_rpe_group.rpes.append(shortend_rpes)
+
+    for rpe_group in group_dict.values():
+        rpe_group.calc_rpe_avg()
+    
+    return group_dict   
+
+
+def extract_last_vals(groups_per_trial: Dict[str, Dict[int, RpeGroup]]) -> Dict[str, List[List[float]]]:
+    """Extracts the last values from RPE groups for each trial.
+
+    Args:
+        groups_per_trial (Dict[str, Dict[int, RpeGroup]]): A dictionary where keys are trial IDs
+            and values are dictionaries mapping positions to RPE groups.
+
+    Returns:
+        Dict[str, List[List[float]]]: A dictionary where keys are trial IDs and values are lists of 
+            lists containing the last RPE values for each group, sorted by position.
+    """
+    r = {}
+    for id_, groups in groups_per_trial.items():
+        # Initialize lists to store positions and last RPE values
+        xs, last_vals = [], []
+        for pos, group in groups.items():
+            xs.append(pos)  # Store the position
+            last_vals.append([rpe[-1] for rpe in group.rpes])  # Store the last RPE values for the group
+
+        # Sort the positions and corresponding last values
+        sort_idxs = np.argsort(xs)
+        r[id_] = [last_vals[sort_idx] for sort_idx in sort_idxs]
+
+    return r

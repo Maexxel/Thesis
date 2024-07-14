@@ -89,10 +89,10 @@ class MyStarkweather(Dataset):
         for exp in self.raw_exps:
             i = 0
             for trial in exp.trials:
-                trials.append(trial)
+                i += len(trial)
                 if i > self.len_sequences:
                     break
-                i += len(trial)
+                trials.append(trial)
 
         return trials
 

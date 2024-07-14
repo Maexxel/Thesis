@@ -83,10 +83,6 @@ def plot_bottlenecks(params: Dict,
     
     return fig
 
-
-import absl.logging
-absl.logging.set_verbosity('error')
-
 def plot_bottleneck_evolution(path: str, end=None):
     """
     Plots the evolution of latent and update sigmas over training checkpoints.
