@@ -4,11 +4,35 @@ import optax
 import jax.numpy as jnp
 from flax.training import train_state
 
-from .rnn_utils import safe_softmax_cross_entropy, compute_accuracy
+from .rnn_utils import safe_softmax_cross_entropy, compute_accuracy, value_loss
 from .disrnn_model import DisRNN
 
 PRNGKey = jax.Array
 
+def disrnn_value_loss(logits, labels, gamma: float, kl_loss_factor: float):
+    true_logits = logits[:,:,:-1]
+    kl_loss = jnp.mean(logits[:,:,-1])
+    loss_from_value = value_loss(true_logits, labels, gamma)
+    return loss_from_value + kl_loss_factor * kl_loss
+
+@jax.jit
+def disrnn_value_trainstep(state: 'DisRNNTrainState', xbatch, ybatch):
+    def loss_fun(params):
+        bottleneck_key, new_bottleneck_key = jax.random.split(state.bottleneck_master_key)
+        logits = state.apply_fn({'params': params}, xbatch,
+                                rngs={"bottleneck_master_key": bottleneck_key})
+        del bottleneck_key
+
+        state.replace(bottleneck_master_key=new_bottleneck_key)
+        del new_bottleneck_key
+
+        loss = disrnn_value_loss(logits, ybatch, 0.93, kl_loss_factor=state.kl_loss_factor)
+        return loss, logits
+   
+    grad_fn = jax.value_and_grad(loss_fun, has_aux=True)
+    (loss, logits), grads = grad_fn(state.params)
+    state = state.apply_gradients(grads=grads)
+    return state, {"loss": loss}
 
 def disrnn_loss(logits, labels, kl_loss_factor: float):
     true_logits = logits[:,:,:-1]

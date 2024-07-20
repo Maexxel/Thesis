@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 import jax
 import optax
 import os
+import json
 import time
 import numpy as np
 import jax.numpy as jnp
@@ -80,7 +81,7 @@ def train_one_epoch(state: train_state.TrainState,
     return state, epoch_metrics_np
 
 
-def _plot_metrics(data):
+def _plot_metrics(data: Dict[str, List[float]]) -> None:
     """
     Plot epochs vs loss (with a logarithmic y-axis) and a variable number of metrics with stacked y-axes.
     Also plots dotted crosses at the points of lowest values for each metric.
@@ -155,6 +156,7 @@ def train_model(train_state: train_state.TrainState,
                 train_step_fun: Callable[..., Any],
                 num_epochs: int = 20,
                 epoch_offset: int = 0,
+                stop_training: int | None = 0,
                 print_every_other: int = 1,
                 save_path: None | str = None,
                 plot_metrics: bool = True) -> Tuple[train_state.TrainState, List[Dict[str, float]]]:
@@ -177,6 +179,14 @@ def train_model(train_state: train_state.TrainState,
     from .disrnn_utils import DisRNNTrainState
 
     print(f"Started Training on {', '.join(map(str, jax.devices()))}...\n")
+
+    # creating save folder if it doesnt exist
+    if save_path is not None:
+        save_path = os.path.abspath(save_path)
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+            print(f"Checkpointing folder not found. Creating a new one at\n   {save_path}")
+
     print(f"  Epoch | Time (s) | Metrics")
     print(f"  ------+----------+----------------->")
     training_metrics: Dict[str, float] = {}
@@ -196,7 +206,7 @@ def train_model(train_state: train_state.TrainState,
 
         # metrics
         for metric_name, metric_value in epoch_metrics.items():
-            training_metrics[metric_name] = training_metrics.get(metric_name, []) + [metric_value]
+            training_metrics[metric_name] = training_metrics.get(metric_name, []) + [float(metric_value)]
 
         # output
         if epoch % print_every_other == 0 or epoch == 1:
@@ -206,15 +216,33 @@ def train_model(train_state: train_state.TrainState,
 
         # checkpointing
         if save_path is not None:
+            # model checkpointing
             try:
-                abs_path = os.path.abspath(save_path)
-                checkpoints.save_checkpoint(ckpt_dir=abs_path, target=train_state, step=epoch, keep_every_n_steps=10)
+                checkpoints.save_checkpoint(ckpt_dir=save_path, target=train_state, step=epoch, keep_every_n_steps=10)
             except Exception as e:
                 print(f"Saving to disk failed, due to exception: {e}.")
+
+            # metrics saving
+            with open(f"{save_path}/metrics.json", 'w') as f:
+                json.dump(training_metrics, f)
+
+        # stop training if loss is at minimum
+        if stop_training is not None and epoch >= stop_training:
+            assert "loss" in training_metrics.keys(), "The metric <loss> must be part of the training_metrics dict"
+            assert stop_training > 0, "stop_training must be greater the 0"
+
+            all_smaller = True
+            for prev_loss in range(-stop_training, -1):
+                all_smaller &= training_metrics["loss"][prev_loss] < training_metrics["loss"][prev_loss + 1]
+
+            if all_smaller and epoch >= stop_training:
+                print("  Training stopped, due to increasing loss")
+                break
 
     print(f"  ------+----------+----------------->")
     print(f"\nTraining finished. Trained {epoch} epochs in {time.time() - training_start_time} s.")
 
+    # plot metrics
     if plot_metrics:
         print("Plotting metrics...")
         _plot_metrics(training_metrics)
@@ -281,7 +309,8 @@ def eval(dataset: Dataset,
 def eval_value_wrapper(dataset: MyStarkweather,
                        model_state: train_state.TrainState,
                        sigma: float = 0.05,
-                       verbose: bool = False) -> List[Trial]:
+                       verbose: bool = False,
+                       true_output: None | int = None) -> List[Trial]:
     """
     Evaluate model outputs on a dataset and map them to trials.
 
@@ -300,7 +329,12 @@ def eval_value_wrapper(dataset: MyStarkweather,
                                             dataset.xs, inspect=True,
                                             rngs={"bottleneck_master_key": jax.random.key(0)})  # is not uses when using a GRU cell
 
+    if true_output is not None:
+        outputs = outputs[:,:,:true_output]
+        print(outputs.shape)
+
     # Ensure outputs have expected shape (batch_size/n_seq, seq_len)
+    assert outputs.shape[-1] == 1, "Outputs must be 1D (i.e. the value)."
     outputs = outputs.squeeze(-1)
 
     if verbose:
