@@ -331,7 +331,6 @@ def eval_value_wrapper(dataset: MyStarkweather,
 
     if true_output is not None:
         outputs = outputs[:,:,:true_output]
-        print(outputs.shape)
 
     # Ensure outputs have expected shape (batch_size/n_seq, seq_len)
     assert outputs.shape[-1] == 1, "Outputs must be 1D (i.e. the value)."

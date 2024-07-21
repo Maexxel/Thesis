@@ -4,6 +4,7 @@ if TYPE_CHECKING:
     from starkweather import Trial
 
 from dataclasses import dataclass, field
+import os
 import numpy as np
 import numpy.typing as npt
 
@@ -146,3 +147,43 @@ def extract_last_vals(groups_per_trial: Dict[str, Dict[int, RpeGroup]]) -> Dict[
         r[id_] = [last_vals[sort_idx] for sort_idx in sort_idxs]
 
     return r
+
+
+def decode_available_models(path: str = "data/models/belief_models") -> Dict[str, Dict[str, int | float]]:
+    """Decodes the available models in the specified directory and extracts their parameters.
+
+    Args:
+        path (str, optional): Path to the directory containing model files. Defaults to "data/models/belief_models".
+
+    Returns:
+        Dict[str, Dict[str, int | float]]: A dictionary where keys are model filenames and values are dictionaries of model parameters.
+    """
+    def convert_to_float(x: str) -> float:
+        with_dot = f"{x[0]}.{x[1:]}"
+        return float(with_dot)
+
+    DISRNN_ID = "disrnn"
+
+    ID_POS = 0
+    LEARNING_RATE_POS = 1
+    HIDDEN_SIZE_POS = 2
+    OMISSON_PROB_POS = 3
+    KL_LOS_POS = 4
+
+    # List all files in the specified directory
+    all_model_paths = os.listdir(path)
+    all_models = {}
+    for model in all_model_paths:
+        model_params_raw = model.split('_')
+        # Extract model parameters from the filename
+        model_params = {"type": model_params_raw[ID_POS],
+                        "learning_rate": convert_to_float(model_params_raw[LEARNING_RATE_POS]),
+                        "hidden_size": int(model_params_raw[HIDDEN_SIZE_POS]),
+                        "ommision_probs": convert_to_float(model_params_raw[OMISSON_PROB_POS])}
+        
+        # If the model is of type DISRNN, extract the KL loss parameter
+        if model_params["type"] == DISRNN_ID:
+            model_params["kl_loss"] = convert_to_float(model_params_raw[KL_LOS_POS])
+        all_models[model] = model_params
+
+    return all_models
