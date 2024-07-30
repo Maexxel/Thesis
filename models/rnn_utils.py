@@ -156,7 +156,7 @@ def train_model(train_state: train_state.TrainState,
                 train_step_fun: Callable[..., Any],
                 num_epochs: int = 20,
                 epoch_offset: int = 0,
-                stop_training: int | None = 0,
+                stop_training: int | None = None,
                 print_every_other: int = 1,
                 save_path: None | str = None,
                 plot_metrics: bool = True) -> Tuple[train_state.TrainState, List[Dict[str, float]]]:

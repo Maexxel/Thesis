@@ -8,6 +8,7 @@ if TYPE_CHECKING:
 
 import numpy as np
 import scipy
+import matplotlib.pyplot as plt
 from custom_datasets import MyStarkweather
 
 
@@ -180,3 +181,37 @@ def add_pomdp_states_beliefs(experiment: MyStarkweather,
         i += trial.trial_length
     
     return trials
+
+
+def plot_pomdp_tables(trans_prob, obs_prob) -> None:
+    for data, is_t in zip([trans_prob, obs_prob], [True, False]):
+        plt.figure(figsize=(10, 10))
+        if is_t:
+            im = plt.imshow(data, vmin=0, vmax=1, aspect='equal')
+        else:
+            im = plt.imshow(data)
+
+        ax = plt.gca()
+
+        # Major ticks
+        ax.set_xticks(np.arange(0, 25, 1))
+        ax.set_yticks(np.arange(0, 25, 1))
+
+        # Labels for major ticks
+        ax.set_xticklabels(np.arange(1, 26, 1))
+        ax.set_yticklabels(np.arange(1, 26, 1))
+
+        # Minor ticks
+        ax.set_xticks(np.arange(-.5, 25, 1), minor=True)
+        ax.set_yticks(np.arange(-.5, 25, 1), minor=True)
+
+        # Gridlines based on minor ticks
+        ax.grid(which='minor', color='w', linestyle='-', linewidth=2)
+        ax.tick_params(which='minor', bottom=False, left=False)
+
+        # axis labels
+        ax.set_ylabel("From state")
+        ax.set_xlabel("To state")
+
+        plt.title("Transition probabilities" if is_t else "Observation probabilities")
+        plt.savefig(f"figures/{'transition' if is_t else 'observation'}_prob_visualization.png")
