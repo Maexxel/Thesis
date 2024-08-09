@@ -187,7 +187,7 @@ def plot_pomdp_tables(trans_prob, obs_prob) -> None:
     for data, is_t in zip([trans_prob, obs_prob], [True, False]):
         plt.figure(figsize=(10, 10))
         if is_t:
-            im = plt.imshow(data, vmin=0, vmax=1, aspect='equal')
+            im = plt.imshow(data, vmin=0, vmax=1, aspect='equal', cmap="Oranges")
         else:
             im = plt.imshow(data)
 
@@ -206,7 +206,8 @@ def plot_pomdp_tables(trans_prob, obs_prob) -> None:
         ax.set_yticks(np.arange(-.5, 25, 1), minor=True)
 
         # Gridlines based on minor ticks
-        ax.grid(which='minor', color='w', linestyle='-', linewidth=2)
+        gridline_color = "w" if is_t else "#808080"
+        ax.grid(which='minor', color=gridline_color, linestyle='-', linewidth=2)
         ax.tick_params(which='minor', bottom=False, left=False)
 
         # axis labels

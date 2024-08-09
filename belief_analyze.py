@@ -144,7 +144,7 @@ def multi_value_analyze(ommision_probability: float,
 
         # Initialize model state
         master_key = jax.random.PRNGKey(0)
-        if model_conf["type"] == VALUE_ID:
+        if model_conf["type"] == VALUE_ID or model_conf["type"] == "vrnnuntrained":
             model_state = create_gru_train_state(
                 master_key,
                 learning_rate=model_conf["learning_rate"],
@@ -270,15 +270,27 @@ def plot_mses(mses: Dict[str, float], model_confs: Dict[str, Dict[str, float | i
     # Sort model paths based on the sorting key derived from model configurations
     model_paths_sorted = sorted(mses.keys(), key=lambda path: sort_model_key(model_confs[path]))
     colors = plt.get_cmap("Dark2").colors
-    klloss_color_map = [(model_confs[id_].get("kl_loss", 0), None) for id_ in model_paths_sorted]
+    klloss_color_map = [(model_confs[id_].get("kl_loss", 0), None) for id_ in model_paths_sorted][1:]
     klloss_color_map = {kl_loss: colors[kl_loss_idx % len(colors)] for kl_loss_idx, (kl_loss, _) in enumerate(klloss_color_map)}
 
+    def get_correct_colors(model_type: str, kl_loss: float | None = None) -> str | int:
+        match model_type:
+            case "vrnn":
+                return "black"
+            case "vrnnuntrained":
+                return "red"
+            case "disrnn":
+                return klloss_color_map[kl_loss]
+            case _:
+                raise AttributeError(f"Invalid model-type: <{model_type}>")
+    
     # Plot each model's MSE with appropriate markers and colors
     for id_ in model_paths_sorted:
         plt.scatter(str(model_confs[id_]['hidden_size']),
                     mses[id_],
-                    color="black" if model_confs[id_]["type"] == "vrnn" else klloss_color_map[model_confs[id_]["kl_loss"]],
-                    marker="o" if model_confs[id_]["type"] == "vrnn" else "^")
+                    color=get_correct_colors(model_confs[id_]["type"], model_confs[id_].get("kl_loss", None)),
+                    marker="o" if "vrnn" in model_confs[id_]["type"] else "^",
+                    alpha=0.6)
         
     # Set y-axis to log scale
     plt.gca().set_yscale('log')
@@ -287,7 +299,9 @@ def plot_mses(mses: Dict[str, float], model_confs: Dict[str, Dict[str, float | i
     plt.title(f"RPE MSEs - Ommission Probability = {model_confs[model_paths_sorted[0]]['ommision_probs']}")
 
     # Create a legend for the plot
-    legend_elements = ([Line2D([0], [0], marker='o', color='w', label='Value RNN', markerfacecolor='black', markersize=10)] + 
+    legend_elements = ([Line2D([0], [0], marker='o', color='w', label='GRU-RNN', markerfacecolor='black', markersize=10)] +
+                       [Line2D([0], [0], marker='o', color='w', label='Untrained GRU-RNN', markerfacecolor='red', markersize=10)] +
                        [Line2D([0], [0], marker='^', color='w', label=f'DisRNN - beta={kl_loss}', markerfacecolor=color, markersize=10) for kl_loss, color in klloss_color_map.items()])
-    plt.legend(handles=legend_elements)
+    plt.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1, 0.5))
+
     plt.show()

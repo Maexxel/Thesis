@@ -14,7 +14,8 @@ from .disrnn_model import DisRNNCell
 
 def plot_bottlenecks(params: Dict,
                      sort_latents: bool=True,
-                     obs_names: None | List[str] =None):
+                     obs_names: None | List[str]=None,
+                     title: str = ""):
     """
     Source:
         Adapted from https://github.com/kstach01/CogModelingRNNsTutorial.git
@@ -25,6 +26,7 @@ def plot_bottlenecks(params: Dict,
         params (dict): Dictionary containing model parameters.
         sort_latents (bool, optional): Whether to sort latent sigmas. Default is True.
         obs_names (list or None, optional): List of observation names. Default is None.
+        title (str, optional): Title of the plot. Default is no title.
 
     Returns:
         matplotlib.figure.Figure: Figure object containing the plotted subplots.
@@ -81,6 +83,10 @@ def plot_bottlenecks(params: Dict,
     plt.ylabel('Latent #')
     plt.title('Update MLP Bottlenecks')
     
+    if title != "":
+        fig.suptitle(title, fontsize=16)
+    fig.tight_layout()
+    
     return fig
 
 def plot_bottleneck_evolution(path: str, end=None):
@@ -96,6 +102,7 @@ def plot_bottleneck_evolution(path: str, end=None):
     Returns:
         fig (matplotlib.figure.Figure): The matplotlib Figure object containing the plot.
     """
+    IN_DIM = 2
     checkpoints_raw = os.listdir(path)
 
     def map_func(filename: str) -> Tuple[str, int]:
@@ -153,7 +160,8 @@ def plot_bottleneck_evolution(path: str, end=None):
 
     update_sigmas = np.stack(update_sigmas)
     update_sigmas = np.array(2 * jax.nn.sigmoid(update_sigmas))
-    epochs, latent_dim, in_dim = len(latent_sigmas[0]), len(latent_sigmas), 2
+    epochs, latent_dim, in_dim = len(latent_sigmas[0]), len(latent_sigmas), IN_DIM
+    n_update_bootlenecks = (in_dim + latent_dim) * latent_dim
 
     update_sigmas = update_sigmas.reshape(epochs, latent_dim, latent_dim + in_dim)
     update_sigmas_sort = np.hstack([np.arange(in_dim) + latent_dim, latent_sort_idx])
@@ -170,7 +178,7 @@ def plot_bottleneck_evolution(path: str, end=None):
                      extent=(-.5, checkpoints[-1][1] + .5, -.5, latent_dim + .5))
     ax1.set_title('Latent Sigmas')
     ax1.set_xlabel('Epoch')
-    ax1.set_yticks(np.arange(0, 5, 1))
+    ax1.set_yticks(np.arange(0, latent_dim, 1))
     ax1.set_yticklabels([f"Latent {i}" for i in range(1, latent_dim + 1)])
 
     # Plot update_sigmas (second subplot)
@@ -178,7 +186,7 @@ def plot_bottleneck_evolution(path: str, end=None):
                      extent=(-.5, checkpoints[-1][1] + .5, len(update_sigmas) + .5, -.5))
     ax2.set_title('Update Sigmas')
     ax2.set_xlabel('Epoch')
-    ax2.set_yticks(np.arange(-.5, 34.5, 7))
+    ax2.set_yticks(np.arange(-.5, n_update_bootlenecks - .5, 7))
     ax2.set_yticklabels([f"Latent {i}" for i in range(1, latent_dim + 1)])
     
     # Adjust y-labels of second plot
@@ -192,7 +200,7 @@ def plot_bottleneck_evolution(path: str, end=None):
 
     # Adjust tick labels
     per_latent_labels = ["Choice", "Reward"] + [f"Latent {i}" for i in range(1, latent_dim + 1)]
-    ax2.set_yticks(np.arange(0, 35), minor=True)
+    ax2.set_yticks(np.arange(0, n_update_bootlenecks), minor=True)
     ax2.set_yticklabels(per_latent_labels * latent_dim, minor=True)
 
     # Add gridlines and adjust labels
