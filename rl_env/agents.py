@@ -64,13 +64,13 @@ class QAgent:
       raise ValueError(f'Value of {name} must be in [0, 1] range. Found value of {x}.')
 
 class LeakyActorCriticAgent:
-  def __init__(self, v:float = .5, theta:float = .5) -> None:
+  def __init__(self, v:float = .5, theta:float = .0, alpha_v=0.3, alpha_l=2, alpha_f=0.05) -> None:
     self.v = v
     self.theta = theta
 
-    self.alpha_v = 0.3
-    self.alpha_l = 1
-    self.alpha_f = 0.05
+    self.alpha_v = alpha_v
+    self.alpha_l = alpha_l
+    self.alpha_f = alpha_f
     
   def update(self, reward: int, choice: int):
     """
@@ -90,12 +90,12 @@ class LeakyActorCriticAgent:
     """
     Calculates and returns choice, also updates internal choice variable.
     """
-    choice_probs = 1 / (1 + np.exp(self.theta))
-    return np.random.choice(2, p=[1-choice_probs, choice_probs])
+    choice_probs = 1 / (1 + np.exp(-self.theta))
+    return np.random.choice(2, p=[choice_probs, 1-choice_probs])
   
   @property
   def q(self):
-    return np.array([self.v, self.theta])
+    return np.array([self.theta, self.v])
   
 class LeakyActor2:
   """An agent that runs simple Q-learning for the y-maze tasks.
@@ -106,7 +106,7 @@ class LeakyActor2:
     q: The agent's current estimate of the reward probability on each arm
   """
   def __init__(self,
-               alpha_l: float = 1,
+               alpha_l: float = 1.,
                alpha_v: float = 0.3,
                alpha_f: float = 0.05,
                n_actions: int = 2,):
@@ -136,8 +136,7 @@ class LeakyActor2:
 
   def get_choice(self) -> int:
     """Sample a choice, given the agent's current internal state."""
-    choice_probs = 1 / (1 + np.exp(-(self._q[0] - self._q[1])))
-    #print(f"self._q: {self._q}, choice_probs: {choice_probs}")
+    choice_probs = 1 / (1 + np.exp(-(self._q[1] - self._q[0])))
     return np.random.choice(2, p=[choice_probs, 1 - choice_probs])
 
   def update(self,
@@ -153,15 +152,11 @@ class LeakyActor2:
         return np.exp(self._q[choice]) / np.sum(np.exp(self._q))
   
     opp_choice = 1 - choice
-    self._q[choice] = (1 - self._alpha_f) * self._q[choice] + self._alpha_l * (reward - self.v) * (1 - softmax(choice))
-    self._q[opp_choice] = (1 - self._alpha_f) * self._q[opp_choice] - self._alpha_l * (reward - self.v) * softmax(opp_choice)
+    self._q[choice] = (1. - self._alpha_f) * self._q[choice] + self._alpha_l * (reward - self.v) * (1. - softmax(choice))
+    self._q[opp_choice] = (1. - self._alpha_f) * self._q[opp_choice] - self._alpha_l * (reward - self.v) * softmax(opp_choice)
 
     self.v = (1 - self._alpha_v) * self.v + self._alpha_v * reward
 
   @property
   def q(self):
-    # This establishes q as an externally visible attribute of the agent.
-    # For agent = AgentQ(...), you can view the q values with agent.q; however,
-    # you will not be able to modify them directly because you will be viewing
-    # a copy.
-    return np.hstack([[self._q[0] - self._q[1]], [self.v]])
+    return np.hstack([[self._q[1] - self._q[0]], [self.v]])
