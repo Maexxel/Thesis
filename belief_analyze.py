@@ -15,6 +15,7 @@ import numpy as np
 from scipy.linalg import lstsq
 from sklearn.linear_model import LogisticRegression
 from scipy.special import softmax
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
@@ -60,6 +61,18 @@ def _make_predictions(rs, Z, w, gamma, add_bias=True):
     values.append(np.nan)
     return np.array(rpes), np.array(values)
 
+def add_value_and_rpe(trials, value_weights, gamma):
+    Z = np.vstack([trial.Z for trial in trials])
+    rs = np.hstack([trial.y[:,0] for trial in trials])
+    rpes, values = _make_predictions(rs, Z, value_weights, gamma)
+    
+    i = 0
+    for trial in trials:
+        trial.value = values[i:(i+trial.trial_length)]
+        trial.rpe = rpes[i:(i+trial.trial_length-1)]
+        i += trial.trial_length
+    return trials
+
 
 def safelog(x):
     y = x.copy()
@@ -68,6 +81,10 @@ def safelog(x):
 
 
 def get_loglike(zs, ss) -> float:
+    """
+    Calculates the log-likelihood between a models hidden state (zs)
+    and the belief state.
+    """
     clf = LogisticRegression(max_iter=int(1e4))
     clf.fit(zs, ss)
     pred1 = softmax(clf.decision_function(zs), axis=-1)
@@ -75,6 +92,9 @@ def get_loglike(zs, ss) -> float:
 
 
 def get_mean_value(trials):
+    """
+    Calculates the mean predicted value over all model trials.
+    """
     values_normal = {trial.isi: [] for trial in trials}
     max_iti = max([trial.iti for trial in trials])
     for trial in trials:
@@ -89,6 +109,9 @@ def get_mean_value(trials):
 
 
 def get_mean_rpe(trials):
+    """
+    Calcualtes the mean rpe over all model trials.
+    """
     rpes = {trial.isi: [] for trial in trials}
 
     for trial in trials:
@@ -99,6 +122,9 @@ def get_mean_rpe(trials):
 
 
 def get_r2(hidden_states, pomdp_beliefs) -> float:
+    """
+    Calculates the correlation r2. If bias should be added, comment in the below line.
+    """
     # adding bias or not
     # hidden_states = np.hstack([hidden_states, np.ones((hidden_states.shape[0],1))])
     w = lstsq(hidden_states, pomdp_beliefs)[0]
@@ -106,19 +132,6 @@ def get_r2(hidden_states, pomdp_beliefs) -> float:
     Yhat = hidden_states @ w
     top = pomdp_beliefs - Yhat
     return 1 - (np.var(top)/np.var(pomdp_beliefs))
-
-
-def add_value_and_rpe(trials, value_weights, gamma):
-    Z = np.vstack([trial.Z for trial in trials])
-    rs = np.hstack([trial.y[:,0] for trial in trials])
-    rpes, values = _make_predictions(rs, Z, value_weights, gamma)
-    
-    i = 0
-    for trial in trials:
-        trial.value = values[i:(i+trial.trial_length)]
-        trial.rpe = rpes[i:(i+trial.trial_length-1)]
-        i += trial.trial_length
-    return trials
 
 
 def calc_mse(trial_dict: Dict[str, List[MyTrial]]) -> Dict[str, float]:
@@ -316,7 +329,7 @@ def plot_mean_rpes(results):
     plt.ylabel("RPE Average")
 
 
-def plot_mses(mses: Dict[str, float],
+def plot_metrics(mses: Dict[str, float],
               model_confs: Dict[str, Dict[str, float | int]],
               title: str) -> None:
     """Plots the Mean Squared Errors (MSEs) of different models, distinguishing between Value RNN and DisRNN models.
@@ -325,6 +338,7 @@ def plot_mses(mses: Dict[str, float],
         mses (Dict[str, float]): A dictionary where keys are model paths and values are their respective MSEs.
         model_confs (Dict[str, Dict[str, float | int]]): A dictionary where keys are model paths and values are dictionaries of model configurations.
     """
+    matplotlib.rcParams.update({'font.size': 15})
     def sort_model_key(model_conf: Dict[str, float | int]) -> float:
         return model_conf["hidden_size"] * 100 + int(model_conf["type"] == "vrnn") * 10 + model_conf.get("kl_loss", -1)
     

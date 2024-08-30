@@ -6,7 +6,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 
-from .agents import LeakyActor3 
+from .agents import LeakyActor2
 
 X_LABEL_FONT_SIZE = 9
 Y_LABEL_FONT_SIZE = X_LABEL_FONT_SIZE
@@ -204,12 +204,12 @@ def plot_leaky_session(choices: Iterable[int],
     if save is not None:
         plt.savefig(save, bbox_inches=Bbox([[.7,-0.2],[12.9,2.1]]))
 
-def analyze_leaky_agent(leaky_agent: LeakyActor3, save: str | None = None) -> None:
+def analyze_leaky_agent(leaky_agent: LeakyActor2, save: str | None = None) -> None:
     """
-    Analyze the leaky compute of a LeakyActor3 agent and plot the results.
+    Analyze the leaky compute of a LeakyActor2 agent and plot the results.
 
     Args:
-        leaky_agent (LeakyActor3): The leaky agent to be analyzed.
+        leaky_agent (LeakyActor2): The leaky agent to be analyzed.
         save (str | None): Path to save the plot. If None, the plot is not saved.
 
     Returns:

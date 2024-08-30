@@ -184,6 +184,8 @@ class DisRNN(nn.Module):
         )  
 
 if __name__ == "__main__":
+    # The following code is only used for testing and has no specific meaning
+
     master_key = jax.random.key(0)
     carry_init_key, param_key, bottleneck_master_key = jax.random.split(master_key, 3) 
 

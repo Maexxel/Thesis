@@ -20,6 +20,9 @@ from flax.training import train_state, checkpoints
 
 
 def value_loss(output: jnp.array, target: jnp.array, gamma: float) -> float:
+   """
+   Calculates the Temporal Difference Error.
+   """
    V_target = target[:,1:,:] + gamma * output[:,1:,:]
    loss = optax.squared_error(output[:,:-1,:], V_target).mean()
    return loss
@@ -168,6 +171,9 @@ def train_model(train_state: train_state.TrainState,
         dataloader (DataLoader): DataLoader providing batches of training data.
         train_step_fun (Callable[..., Any]): Function defining a single training step.
         num_epochs (int, optional): Number of epochs to train the model. Default is 20.
+        epoch_offset (int, optional): Definies the number of the starting epoch.
+            Usefull if a already trained model is continued to be trained.
+            Keeps the "printers" and checkpoint saving inline.
         print_every_other (int, optional): Frequency of epoch printing. Default is 1 (print every epoch).
         save_path (str or None, optional): Path to save checkpoints. Default is None (no checkpoint saving).
         plot_metrics (bool, optional): Whether to plot training metrics after training. Default is True.
@@ -250,62 +256,6 @@ def train_model(train_state: train_state.TrainState,
     return train_state, training_metrics
 
 
-def eval(dataset: Dataset,
-         model_state: train_state.TrainState,
-         inspect: bool = False,
-         dataset_start: None | int = None,
-         dataset_end: None | int = None,
-         true_output: None | int = None,
-         verbose: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-    """
-    Evaluate a model on a dataset.
-
-    Args:
-        dataset (Dataset): Dataset to evaluate the model on.
-        model_state (TrainState): Current state of the model.
-        inspect (bool, optional): Whether to inspect intermediate results. Default is False.
-        dataset_start (int, optional): Start index of dataset for evaluation. Default is None (start from the beginning).
-        dataset_end (int, optional): End index of dataset for evaluation. Default is None (evaluate until the end of the dataset).
-        true_output (int, optional): Number of true output dimensions to consider. Default is None (use all dimensions).
-        verbose (bool, optional): Whether to print verbose output. Default is False.
-
-    Returns:
-        Tuple[np.ndarray, Optional[np.ndarray]]: If inspect=True, returns a tuple of numpy arrays (carrys, outputs).
-            If inspect=False, returns a numpy array of outputs.
-    """
-    dataset_start = 0 if dataset_start is None else dataset_start
-    dataset_end = len(dataset) if dataset_end is None else dataset_end
-    assert dataset_start < dataset_end, "dataset_start must be smaller than dataset_end"
-
-    if inspect:
-        carrys, outputs = [], []
-        for seq in dataset.xs[dataset_start: dataset_end]:
-            test_input = np.array(seq)
-            carry, output = model_state.apply_fn({'params': model_state.params}, test_input, inspect=True, rngs={"bottleneck_master_key": jax.random.key(0)})
-            output = output if true_output is None else output[:,:true_output]
-
-            carrys.append(carry)
-            outputs.append(output)
-
-            if verbose:
-                print(f"For Input: {test_input.tolist()}, model_predicts: {np.argmax(output, axis=-1)} (raw: {output.tolist()})")
-                for idx, c in enumerate(carry):
-                    print(f"\tidx {idx}: {c.tolist()}")
-
-        return np.array(carrys), np.array(outputs)
-
-    outputs = []
-    for seq in dataset.xs[dataset_start: dataset_end]:
-        test_input = np.array([seq])
-        output = model_state.apply_fn({'params': model_state.params}, test_input, rngs={"bottleneck_master_key": jax.random.key(0)})
-        output = output if true_output is None else output[:,:,:true_output]
-        if verbose:
-            print(f"For Input: {test_input.tolist()}, model_predicts: {np.argmax(output, axis=-1)} (raw: {output.tolist()})")
-        outputs.append(output[0])
-
-    return np.array(outputs)
-
-
 def eval_value_wrapper(dataset: MyStarkweather,
                        model_state: train_state.TrainState,
                        sigma: float = 0.05,
@@ -319,6 +269,8 @@ def eval_value_wrapper(dataset: MyStarkweather,
         model_state (train_state): Current state of the model.
         sigma (float, optional): Standard deviation multiplier for random noise. Default is 0.05.
         verbose (bool, optional): Whether to print verbose output. Default is False.
+        true_output (int, optional): If set only part of the models ouput is regarded as the output.
+            Used for the DisRNN in which the KL-Loss is appended to the models output.
 
     Returns:
         List[Trial]: List of trials with model outputs and weights mapped.
@@ -368,7 +320,12 @@ def eval_value_wrapper(dataset: MyStarkweather,
     return trials
 
 
-def load_model_state(path: str, state: train_state.TrainState | None = None, step: int | None = None) -> train_state.TrainState:
+def load_model_state(path: str,
+                     state: train_state.TrainState | None = None, 
+                     step: int | None = None) -> train_state.TrainState:
+    """
+    Loading a model state from disk.
+    """
     try:
         abs_path = os.path.abspath(path)
         return checkpoints.restore_checkpoint(ckpt_dir=abs_path, target=state, step=step)

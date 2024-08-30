@@ -73,6 +73,8 @@ def __test_gru_returns_correct_output_shape():
 
 
 if __name__ == "__main__":
+    # The following code is only used for testing and has no specific meaning
+
     __test_gru_returns_correct_output_shape()
 
     gru_model = SimpleGRU(5, 2)
@@ -81,9 +83,6 @@ if __name__ == "__main__":
         )
 
     params = gru_model.init(jax.random.key(0), test_input)["params"]
-    # print("Output:")
-    # print(gru_model.apply({"params": params}, test_input, True))
-
     print(gru_model.tabulate(jax.random.key(1),
                             test_input,
                             compute_flops=True, compute_vjp_flops=True, console_kwargs={"width": 200}))

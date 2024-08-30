@@ -87,7 +87,7 @@ def create_disrnn_train_state(master_rng_key: PRNGKey,
                               choice_mlp_shape: Sequence[int],
                               kl_loss_factor: float
                               ) -> DisRNNTrainState:
-    
+    """Creates initial DisRNN `TrainState`."""
     carry_init_key, param_key, bottleneck_master_key = jax.random.split(master_rng_key, 3)
     model = DisRNN(hidden_size=hidden_size,
                    in_dim=in_dim,

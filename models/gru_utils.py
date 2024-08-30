@@ -43,7 +43,7 @@ def create_gru_train_state(rng,
                            out_dim: int,
                            batch_size: int,
                            seq_length: int) -> GRUTrainState:
-    """Creates initial `TrainState`. Also returns model."""
+    """Creates initial GRU-RNN `TrainState`."""
     model = SimpleGRU(hidden_size, out_dim)
     x_train_expample = jnp.ones([batch_size, seq_length, in_dim])
     params = model.init(rng, x_train_expample)['params']
